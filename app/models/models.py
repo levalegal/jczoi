@@ -102,6 +102,21 @@ class ObjectRepository:
             if conn:
                 conn.close()
     
+    def get_by_address(self, address: str) -> Optional[Object]:
+        conn = None
+        try:
+            conn = self.db.get_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM Objects WHERE address = ?", (address,))
+            row = cursor.fetchone()
+            return Object.from_row(row) if row else None
+        except Exception as e:
+            print(f"Ошибка получения объекта по адресу '{address}': {e}")
+            return None
+        finally:
+            if conn:
+                conn.close()
+    
     def create(self, obj: Object) -> int:
         conn = None
         try:
@@ -169,99 +184,167 @@ class MeterRepository:
         self.db = db
     
     def get_by_object_id(self, object_id: int) -> List[Meter]:
-        conn = self.db.get_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM Meters WHERE object_id = ?", (object_id,))
-        rows = cursor.fetchall()
-        conn.close()
-        return [Meter.from_row(row) for row in rows]
+        conn = None
+        try:
+            conn = self.db.get_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM Meters WHERE object_id = ?", (object_id,))
+            rows = cursor.fetchall()
+            return [Meter.from_row(row) for row in rows]
+        except Exception as e:
+            print(f"Ошибка получения счетчиков для объекта {object_id}: {e}")
+            return []
+        finally:
+            if conn:
+                conn.close()
     
     def get_by_id(self, meter_id: int) -> Optional[Meter]:
-        conn = self.db.get_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM Meters WHERE id = ?", (meter_id,))
-        row = cursor.fetchone()
-        conn.close()
-        return Meter.from_row(row) if row else None
+        conn = None
+        try:
+            conn = self.db.get_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM Meters WHERE id = ?", (meter_id,))
+            row = cursor.fetchone()
+            return Meter.from_row(row) if row else None
+        except Exception as e:
+            print(f"Ошибка получения счетчика по ID {meter_id}: {e}")
+            return None
+        finally:
+            if conn:
+                conn.close()
+    
+    def get_by_serial_number_and_object_id(self, serial_number: str, object_id: int) -> Optional[Meter]:
+        conn = None
+        try:
+            conn = self.db.get_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM Meters WHERE serial_number = ? AND object_id = ?", 
+                         (serial_number, object_id))
+            row = cursor.fetchone()
+            return Meter.from_row(row) if row else None
+        except Exception as e:
+            print(f"Ошибка получения счетчика по серийному номеру {serial_number}: {e}")
+            return None
+        finally:
+            if conn:
+                conn.close()
     
     def create(self, meter: Meter) -> int:
-        conn = self.db.get_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO Meters (object_id, type, serial_number, installation_date,
-                              verification_date, next_verification_date, tariff,
-                              unit, location, is_active)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (meter.object_id, meter.type, meter.serial_number,
-              meter.installation_date, meter.verification_date,
-              meter.next_verification_date, meter.tariff, meter.unit,
-              meter.location, meter.is_active))
-        meter_id = cursor.lastrowid
-        conn.commit()
-        conn.close()
-        return meter_id
+        conn = None
+        try:
+            conn = self.db.get_connection()
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO Meters (object_id, type, serial_number, installation_date,
+                                  verification_date, next_verification_date, tariff,
+                                  unit, location, is_active)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (meter.object_id, meter.type, meter.serial_number,
+                  meter.installation_date, meter.verification_date,
+                  meter.next_verification_date, meter.tariff, meter.unit,
+                  meter.location, meter.is_active))
+            meter_id = cursor.lastrowid
+            conn.commit()
+            return meter_id
+        except Exception as e:
+            if conn:
+                conn.rollback()
+            raise Exception(f"Ошибка создания счетчика: {e}")
+        finally:
+            if conn:
+                conn.close()
     
     def update(self, meter: Meter):
-        conn = self.db.get_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            UPDATE Meters SET object_id=?, type=?, serial_number=?,
-                            installation_date=?, verification_date=?,
-                            next_verification_date=?, tariff=?, unit=?,
-                            location=?, is_active=?
-            WHERE id=?
-        """, (meter.object_id, meter.type, meter.serial_number,
-              meter.installation_date, meter.verification_date,
-              meter.next_verification_date, meter.tariff, meter.unit,
-              meter.location, meter.is_active, meter.id))
-        conn.commit()
-        conn.close()
+        conn = None
+        try:
+            conn = self.db.get_connection()
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE Meters SET object_id=?, type=?, serial_number=?,
+                                installation_date=?, verification_date=?,
+                                next_verification_date=?, tariff=?, unit=?,
+                                location=?, is_active=?
+                WHERE id=?
+            """, (meter.object_id, meter.type, meter.serial_number,
+                  meter.installation_date, meter.verification_date,
+                  meter.next_verification_date, meter.tariff, meter.unit,
+                  meter.location, meter.is_active, meter.id))
+            conn.commit()
+        except Exception as e:
+            if conn:
+                conn.rollback()
+            raise Exception(f"Ошибка обновления счетчика: {e}")
+        finally:
+            if conn:
+                conn.close()
 
 class ReadingRepository:
     def __init__(self, db: Database):
         self.db = db
     
     def get_last_reading(self, meter_id: int) -> Optional[Reading]:
-        conn = self.db.get_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT * FROM Readings 
-            WHERE meter_id = ? 
-            ORDER BY reading_date DESC, id DESC 
-            LIMIT 1
-        """, (meter_id,))
-        row = cursor.fetchone()
-        conn.close()
-        return Reading.from_row(row) if row else None
+        conn = None
+        try:
+            conn = self.db.get_connection()
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT * FROM Readings 
+                WHERE meter_id = ? 
+                ORDER BY reading_date DESC, id DESC 
+                LIMIT 1
+            """, (meter_id,))
+            row = cursor.fetchone()
+            return Reading.from_row(row) if row else None
+        except Exception as e:
+            print(f"Ошибка получения последнего показания для счетчика {meter_id}: {e}")
+            return None
+        finally:
+            if conn:
+                conn.close()
     
     def get_by_meter_id(self, meter_id: int) -> List[Reading]:
-        conn = self.db.get_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT * FROM Readings 
-            WHERE meter_id = ? 
-            ORDER BY reading_date DESC
-        """, (meter_id,))
-        rows = cursor.fetchall()
-        conn.close()
-        return [Reading.from_row(row) for row in rows]
+        conn = None
+        try:
+            conn = self.db.get_connection()
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT * FROM Readings 
+                WHERE meter_id = ? 
+                ORDER BY reading_date DESC
+            """, (meter_id,))
+            rows = cursor.fetchall()
+            return [Reading.from_row(row) for row in rows]
+        except Exception as e:
+            print(f"Ошибка получения показаний для счетчика {meter_id}: {e}")
+            return []
+        finally:
+            if conn:
+                conn.close()
     
     def create(self, reading: Reading) -> int:
-        conn = self.db.get_connection()
-        cursor = conn.cursor()
-        last_reading = self.get_last_reading(reading.meter_id)
-        previous_id = last_reading.id if last_reading else None
-        
-        cursor.execute("""
-            INSERT INTO Readings (meter_id, value, reading_date, 
-                                previous_reading_id, photo_path)
-            VALUES (?, ?, ?, ?, ?)
-        """, (reading.meter_id, reading.value, reading.reading_date,
-              previous_id, reading.photo_path))
-        reading_id = cursor.lastrowid
-        conn.commit()
-        conn.close()
-        return reading_id
+        conn = None
+        try:
+            conn = self.db.get_connection()
+            cursor = conn.cursor()
+            last_reading = self.get_last_reading(reading.meter_id)
+            previous_id = last_reading.id if last_reading else None
+            
+            cursor.execute("""
+                INSERT INTO Readings (meter_id, value, reading_date, 
+                                    previous_reading_id, photo_path)
+                VALUES (?, ?, ?, ?, ?)
+            """, (reading.meter_id, reading.value, reading.reading_date,
+                  previous_id, reading.photo_path))
+            reading_id = cursor.lastrowid
+            conn.commit()
+            return reading_id
+        except Exception as e:
+            if conn:
+                conn.rollback()
+            raise Exception(f"Ошибка создания показания: {e}")
+        finally:
+            if conn:
+                conn.close()
 
 class UserRepository:
     def __init__(self, db: Database):

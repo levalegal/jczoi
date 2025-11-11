@@ -1641,6 +1641,11 @@ class MainWindow(QMainWindow):
                 return
             object_id = combo.currentData()
         
+        obj = self.object_repo.get_by_id(object_id)
+        if not obj:
+            QMessageBox.warning(self, "Ошибка", "Объект не найден")
+            return
+        
         meter_dialog = MeterDialog(object_id, parent=self)
         if meter_dialog.exec():
             try:
