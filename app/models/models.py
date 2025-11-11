@@ -348,7 +348,7 @@ class ReadingRepository:
 
 class UserRepository:
     def __init__(self, db: Database):
-        self.db = db # TO DO SENSICTION
+        self.db = db
     
     def get_all(self) -> List[User]:
         conn = self.db.get_connection()
