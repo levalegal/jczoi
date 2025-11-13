@@ -289,26 +289,73 @@ class ObjectDialog(QDialog):
         self.setLayout(layout)
     
     def validate_and_accept(self):
-        if not self.address_edit.text().strip():
-            QMessageBox.warning(self, "Ошибка валидации", "Адрес обязателен для заполнения")
-            self.address_edit.setFocus()
-            return
+        from app.utils.validators import FieldValidator
         
-        try:
-            if self.x_edit.text() and not (0 <= int(self.x_edit.text()) <= 1000):
-                raise ValueError("X должен быть от 0 до 1000")
-            if self.y_edit.text() and not (0 <= int(self.y_edit.text()) <= 1000):
-                raise ValueError("Y должен быть от 0 до 1000")
-            if self.w_edit.text() and not (0 < int(self.w_edit.text()) <= 1000):
-                raise ValueError("Ширина должна быть от 1 до 1000")
-            if self.h_edit.text() and not (0 < int(self.h_edit.text()) <= 1000):
-                raise ValueError("Высота должна быть от 1 до 1000")
-            if self.residents_edit.text() and not self.residents_edit.text().isdigit():
-                raise ValueError("Количество жильцов должно быть числом")
-            if self.residents_edit.text() and int(self.residents_edit.text()) < 0:
-                raise ValueError("Количество жильцов не может быть отрицательным")
-        except ValueError as e:
-            QMessageBox.warning(self, "Ошибка валидации", str(e))
+        errors = []
+        
+        address = self.address_edit.text().strip()
+        valid, error = FieldValidator.validate_required(self.address_edit, address, "Адрес")
+        if not valid:
+            errors.append(error)
+        
+        area = self.area_edit.value()
+        valid, error = FieldValidator.validate_positive_number(self.area_edit, area, "Площадь")
+        if not valid:
+            errors.append(error)
+        
+        residents_text = self.residents_edit.text().strip()
+        if residents_text:
+            valid, error = FieldValidator.validate_integer(self.residents_edit, residents_text, "Количество жильцов")
+            if not valid:
+                errors.append(error)
+            else:
+                residents = int(residents_text)
+                valid, error = FieldValidator.validate_positive_number(self.residents_edit, residents, "Количество жильцов")
+                if not valid:
+                    errors.append(error)
+        
+        if self.x_edit.text().strip():
+            valid, error = FieldValidator.validate_integer(self.x_edit, self.x_edit.text(), "Координата X")
+            if not valid:
+                errors.append(error)
+            else:
+                x = int(self.x_edit.text())
+                valid, error = FieldValidator.validate_range(self.x_edit, x, 0, 1000, "Координата X")
+                if not valid:
+                    errors.append(error)
+        
+        if self.y_edit.text().strip():
+            valid, error = FieldValidator.validate_integer(self.y_edit, self.y_edit.text(), "Координата Y")
+            if not valid:
+                errors.append(error)
+            else:
+                y = int(self.y_edit.text())
+                valid, error = FieldValidator.validate_range(self.y_edit, y, 0, 1000, "Координата Y")
+                if not valid:
+                    errors.append(error)
+        
+        if self.w_edit.text().strip():
+            valid, error = FieldValidator.validate_integer(self.w_edit, self.w_edit.text(), "Ширина")
+            if not valid:
+                errors.append(error)
+            else:
+                w = int(self.w_edit.text())
+                valid, error = FieldValidator.validate_range(self.w_edit, w, 1, 1000, "Ширина")
+                if not valid:
+                    errors.append(error)
+        
+        if self.h_edit.text().strip():
+            valid, error = FieldValidator.validate_integer(self.h_edit, self.h_edit.text(), "Высота")
+            if not valid:
+                errors.append(error)
+            else:
+                h = int(self.h_edit.text())
+                valid, error = FieldValidator.validate_range(self.h_edit, h, 1, 1000, "Высота")
+                if not valid:
+                    errors.append(error)
+        
+        if errors:
+            QMessageBox.warning(self, "Ошибка валидации", "\n".join(errors))
             return
         
         self.accept()
@@ -1469,6 +1516,23 @@ class MainWindow(QMainWindow):
         self.objects_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.objects_table.customContextMenuRequested.connect(self.show_objects_context_menu)
         self.objects_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.objects_table.setAlternatingRowColors(True)
+        self.objects_table.setStyleSheet("""
+            QTableWidget {
+                alternate-background-color: #f0f0f0;
+                gridline-color: #d0d0d0;
+            }
+            QTableWidget::item:selected {
+                background-color: #4a90e2;
+                color: white;
+            }
+            QHeaderView::section {
+                background-color: #e0e0e0;
+                padding: 5px;
+                border: 1px solid #c0c0c0;
+                font-weight: bold;
+            }
+        """)
         self.load_objects_table()
         
         layout.addWidget(self.objects_table)
