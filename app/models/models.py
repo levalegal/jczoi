@@ -381,16 +381,23 @@ class UserRepository:
             if cached is not None:
                 return cached
         
-        conn = self.db.get_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT o.* FROM Objects o
-            JOIN UserObjects uo ON o.id = uo.object_id
-            WHERE uo.user_id = ?
-        """, (user_id,))
-        rows = cursor.fetchall()
-        conn.close()
-        result = [Object.from_row(row) for row in rows]
+        conn = None
+        try:
+            conn = self.db.get_connection()
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT o.* FROM Objects o
+                JOIN UserObjects uo ON o.id = uo.object_id
+                WHERE uo.user_id = ?
+            """, (user_id,))
+            rows = cursor.fetchall()
+            result = [Object.from_row(row) for row in rows]
+        except Exception as e:
+            print(f"Ошибка получения объектов для пользователя {user_id}: {e}")
+            result = []
+        finally:
+            if conn:
+                conn.close()
         
         if cache_service:
             cache_service.set(cache_key, result, ttl_seconds=300)
