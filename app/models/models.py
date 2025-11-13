@@ -417,21 +417,37 @@ class UserRepository:
         return [User.from_row(row) for row in rows]
     
     def assign_object_to_user(self, user_id: int, object_id: int):
-        conn = self.db.get_connection()
-        cursor = conn.cursor() # TO DO SO BAG OR DECSTOP PULL 
-        cursor.execute("""
-            INSERT OR IGNORE INTO UserObjects (user_id, object_id)
-            VALUES (?, ?)
-        """, (user_id, object_id))
-        conn.commit()
-        conn.close()
+        conn = None
+        try:
+            conn = self.db.get_connection()
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT OR IGNORE INTO UserObjects (user_id, object_id)
+                VALUES (?, ?)
+            """, (user_id, object_id))
+            conn.commit()
+        except Exception as e:
+            if conn:
+                conn.rollback()
+            raise Exception(f"Ошибка привязки объекта к пользователю: {e}")
+        finally:
+            if conn:
+                conn.close()
     
     def unassign_object_from_user(self, user_id: int, object_id: int):
-        conn = self.db.get_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            DELETE FROM UserObjects WHERE user_id = ? AND object_id = ?
-        """, (user_id, object_id))
-        conn.commit()
-        conn.close()
+        conn = None
+        try:
+            conn = self.db.get_connection()
+            cursor = conn.cursor()
+            cursor.execute("""
+                DELETE FROM UserObjects WHERE user_id = ? AND object_id = ?
+            """, (user_id, object_id))
+            conn.commit()
+        except Exception as e:
+            if conn:
+                conn.rollback()
+            raise Exception(f"Ошибка отвязки объекта от пользователя: {e}")
+        finally:
+            if conn:
+                conn.close()
 
