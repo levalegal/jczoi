@@ -16,6 +16,8 @@ class Config:
     APP_NAME = "Система учета показаний счетчиков ЖКХ"
     APP_VERSION = "1.0.0"
     
+    SETTINGS_FILE = "settings.json"
+    
     @classmethod
     def ensure_backup_dir(cls):
         backup_path = Path(cls.BACKUP_DIR)

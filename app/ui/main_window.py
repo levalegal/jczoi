@@ -3,9 +3,10 @@ from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QTableWidget, QTableWidgetItem, QDialog,
                              QLineEdit, QDateEdit, QDoubleSpinBox, QComboBox,
                              QFileDialog, QGroupBox, QFormLayout, QTextEdit,
-                             QHeaderView, QMenu, QAbstractItemView)
+                             QHeaderView, QMenu, QAbstractItemView, QStatusBar,
+                             QCheckBox)
 from PyQt6.QtCore import Qt, QDate, pyqtSignal
-from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QAction, QContextMenuEvent
+from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QAction, QContextMenuEvent, QDragEnterEvent, QDropEvent
 from datetime import date, datetime, timedelta
 import os
 from app.database import Database
@@ -35,9 +36,22 @@ class LoginDialog(QDialog):
         
         layout.addLayout(form)
         
+        from app.utils.settings import Settings
+        self.settings = Settings()
+        
+        self.remember_checkbox = QCheckBox("Запомнить логин")
+        self.remember_checkbox.setChecked(self.settings.get_remember_username())
+        layout.addWidget(self.remember_checkbox)
+        
+        last_username = self.settings.get_last_username()
+        if last_username and self.remember_checkbox.isChecked():
+            self.username_edit.setText(last_username)
+            self.password_edit.setFocus()
+        
         buttons = QHBoxLayout()
         login_btn = QPushButton("Войти")
         login_btn.clicked.connect(self.login)
+        login_btn.setDefault(True)
         cancel_btn = QPushButton("Отмена")
         cancel_btn.clicked.connect(self.reject)
         
@@ -51,6 +65,16 @@ class LoginDialog(QDialog):
         username = self.username_edit.text()
         password = self.password_edit.text()
         
+        if not username.strip():
+            QMessageBox.warning(self, "Ошибка", "Введите логин")
+            self.username_edit.setFocus()
+            return
+        
+        if not password:
+            QMessageBox.warning(self, "Ошибка", "Введите пароль")
+            self.password_edit.setFocus()
+            return
+        
         conn = self.db.get_connection()
         cursor = conn.cursor()
         cursor.execute("""
@@ -63,13 +87,24 @@ class LoginDialog(QDialog):
         if result:
             user_id, user_role, stored_password = result
             if AuthService.verify_password(password, stored_password):
+                if self.remember_checkbox.isChecked():
+                    self.settings.set_remember_username(True)
+                    self.settings.set('last_username', username)
+                else:
+                    self.settings.set_remember_username(False)
+                    self.settings.set('last_username', None)
+                
                 self.user_id = user_id
                 self.user_role = user_role
                 self.accept()
             else:
                 QMessageBox.warning(self, "Ошибка", "Неверный логин или пароль")
+                self.password_edit.clear()
+                self.password_edit.setFocus()
         else:
             QMessageBox.warning(self, "Ошибка", "Неверный логин или пароль")
+            self.password_edit.clear()
+            self.username_edit.setFocus()
 
 class CityMapWidget(QWidget):
     building_clicked = pyqtSignal(int)
@@ -217,6 +252,11 @@ class ObjectDialog(QDialog):
         self.y_edit = QLineEdit()
         self.w_edit = QLineEdit()
         self.h_edit = QLineEdit()
+        
+        self.x_edit.setToolTip("Координата X здания на карте (0-1000)")
+        self.y_edit.setToolTip("Координата Y здания на карте (0-1000)")
+        self.w_edit.setToolTip("Ширина здания на карте (1-1000)")
+        self.h_edit.setToolTip("Высота здания на карте (1-1000)")
         
         coords_layout.addRow("X:", self.x_edit)
         coords_layout.addRow("Y:", self.y_edit)
@@ -439,6 +479,10 @@ class ReadingDialog(QDialog):
         self.photo_preview.setAcceptDrops(True)
         self.photo_preview.dragEnterEvent = self.drag_enter_event
         self.photo_preview.dropEvent = self.drop_event
+        
+        self.date_edit.setToolTip("Дата снятия показаний счетчика")
+        self.value_edit.setToolTip("Текущее значение счетчика (не может быть меньше предыдущего)")
+        photo_btn.setToolTip("Выбрать фотографию счетчика для подтверждения показаний")
         
         form.addRow("Дата:", self.date_edit)
         form.addRow("Показание:", self.value_edit)
@@ -1070,8 +1114,16 @@ class MainWindow(QMainWindow):
         self.backup_service.start_auto_backup(24)
         self.backup_service.cleanup_old_backups(30)
         
-        self.init_ui()
+        self.setWindowTitle("Система учета показаний счетчиков ЖКХ")
         self.show_login()
+    
+    def closeEvent(self, event):
+        from app.utils.settings import Settings
+        settings = Settings()
+        geometry = self.geometry()
+        settings.set_window_geometry(geometry.x(), geometry.y(), 
+                                    geometry.width(), geometry.height())
+        event.accept()
     
     def show_login(self):
         login = LoginDialog(self.db, self)
