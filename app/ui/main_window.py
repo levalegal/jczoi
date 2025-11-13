@@ -1675,6 +1675,23 @@ class MainWindow(QMainWindow):
         self.meters_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.meters_table.customContextMenuRequested.connect(self.show_meters_context_menu)
         self.meters_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.meters_table.setAlternatingRowColors(True)
+        self.meters_table.setStyleSheet("""
+            QTableWidget {
+                alternate-background-color: #f0f0f0;
+                gridline-color: #d0d0d0;
+            }
+            QTableWidget::item:selected {
+                background-color: #4a90e2;
+                color: white;
+            }
+            QHeaderView::section {
+                background-color: #e0e0e0;
+                padding: 5px;
+                border: 1px solid #c0c0c0;
+                font-weight: bold;
+            }
+        """)
         self.load_meters_table()
         
         layout.addWidget(self.meters_table)
