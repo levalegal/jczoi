@@ -917,11 +917,15 @@ class MainWindow(QMainWindow):
         self.import_service = ImportService(self.db)
         self.user_repo = UserRepository(self.db)
         self.audit_service = AuditService(self.db)
+        from app.services.cache_service import CacheService
+        self.cache_service = CacheService(default_ttl_seconds=300)
         from app.services.backup_service import BackupService
         self.backup_service = BackupService(self.db)
         self.user_id = None
         self.user_role = None
         self.username = None
+        self.readings_current_page = 1
+        self.readings_page_size = 50
         
         self.backup_service.start_auto_backup(24)
         self.backup_service.cleanup_old_backups(30)
@@ -1335,10 +1339,19 @@ class MainWindow(QMainWindow):
             if not obj:
                 return
             
+            old_address = obj.address
             dialog = ObjectDialog(obj, parent=self)
             if dialog.exec():
                 updated_obj = dialog.get_object()
                 self.object_repo.update(updated_obj)
+                self.cache_service.clear()
+                self.audit_service.log_action(
+                    self.user_id, self.username,
+                    'UPDATE', 'Object', obj_id,
+                    old_value=f"Адрес: {old_address}",
+                    new_value=f"Адрес: {updated_obj.address}",
+                    description=f"Обновлен объект: {old_address} -> {updated_obj.address}"
+                )
                 self.load_objects_table()
                 QMessageBox.information(self, "Успех", "Объект обновлен")
         except Exception as e:
@@ -1362,7 +1375,15 @@ class MainWindow(QMainWindow):
             )
             
             if reply == QMessageBox.StandardButton.Yes:
+                old_address = obj.address
                 self.object_repo.delete(obj_id)
+                self.cache_service.clear()
+                self.audit_service.log_action(
+                    self.user_id, self.username,
+                    'DELETE', 'Object', obj_id,
+                    old_value=f"Адрес: {old_address}",
+                    description=f"Удален объект: {old_address}"
+                )
                 self.load_objects_table()
                 QMessageBox.information(self, "Успех", "Объект удален")
         except Exception as e:
@@ -1680,9 +1701,11 @@ class MainWindow(QMainWindow):
         self.load_readings_table()
     
     def filter_readings_table(self):
+        self.readings_current_page = 1
         self.load_readings_table()
     
     def reset_readings_filter(self):
+        self.readings_current_page = 1
         if hasattr(self, 'readings_date_from'):
             self.readings_date_from.setDate(QDate.currentDate().addMonths(-1))
         if hasattr(self, 'readings_date_to'):
