@@ -732,6 +732,14 @@ class BuildingUsersDialog(QDialog):
         if dialog.exec():
             user_id = user_combo.currentData()
             self.user_repo.assign_object_to_user(user_id, self.object_id)
+            self.parent().cache_service.clear()
+            user = self.user_repo.get_by_id(user_id)
+            self.parent().audit_service.log_action(
+                self.parent().user_id, self.parent().username,
+                'UPDATE', 'UserObject', user_id,
+                new_value=f"Привязан к объекту ID: {self.object_id}",
+                description=f"Пользователь '{user.username if user else user_id}' привязан к объекту '{self.object_repo.get_by_id(self.object_id).address if self.object_repo.get_by_id(self.object_id) else self.object_id}'"
+            )
             QMessageBox.information(self, "Успех", "Пользователь привязан к объекту")
             self.close()
             BuildingUsersDialog(self.object_id, self.db, self.parent()).exec()
@@ -767,7 +775,15 @@ class BuildingUsersDialog(QDialog):
         dialog.setLayout(layout)
         if dialog.exec():
             user_id = user_combo.currentData()
+            user = self.user_repo.get_by_id(user_id)
             self.user_repo.unassign_object_from_user(user_id, self.object_id)
+            self.parent().cache_service.clear()
+            self.parent().audit_service.log_action(
+                self.parent().user_id, self.parent().username,
+                'UPDATE', 'UserObject', user_id,
+                old_value=f"Привязан к объекту ID: {self.object_id}",
+                description=f"Пользователь '{user.username if user else user_id}' отвязан от объекта '{self.object_repo.get_by_id(self.object_id).address if self.object_repo.get_by_id(self.object_id) else self.object_id}'"
+            )
             QMessageBox.information(self, "Успех", "Пользователь отвязан от объекта")
             self.close()
             BuildingUsersDialog(self.object_id, self.db, self.parent()).exec()
@@ -816,17 +832,64 @@ class BuildingUsersDialog(QDialog):
         dialog.setLayout(layout)
         if dialog.exec():
             try:
-                obj.building_x = int(x_edit.text()) if x_edit.text().isdigit() else None
-                obj.building_y = int(y_edit.text()) if y_edit.text().isdigit() else None
-                obj.building_width = int(w_edit.text()) if w_edit.text().isdigit() else None
-                obj.building_height = int(h_edit.text()) if h_edit.text().isdigit() else None
+                old_obj_values = {
+                    'building_x': obj.building_x, 'building_y': obj.building_y,
+                    'building_width': obj.building_width, 'building_height': obj.building_height
+                }
+                
+                if x_edit.text().strip():
+                    x_val = int(x_edit.text())
+                    if not (0 <= x_val <= 1000):
+                        raise ValueError("X должен быть от 0 до 1000")
+                    obj.building_x = x_val
+                else:
+                    obj.building_x = None
+                
+                if y_edit.text().strip():
+                    y_val = int(y_edit.text())
+                    if not (0 <= y_val <= 1000):
+                        raise ValueError("Y должен быть от 0 до 1000")
+                    obj.building_y = y_val
+                else:
+                    obj.building_y = None
+                
+                if w_edit.text().strip():
+                    w_val = int(w_edit.text())
+                    if not (0 < w_val <= 1000):
+                        raise ValueError("Ширина должна быть от 1 до 1000")
+                    obj.building_width = w_val
+                else:
+                    obj.building_width = None
+                
+                if h_edit.text().strip():
+                    h_val = int(h_edit.text())
+                    if not (0 < h_val <= 1000):
+                        raise ValueError("Высота должна быть от 1 до 1000")
+                    obj.building_height = h_val
+                else:
+                    obj.building_height = None
                 
                 self.object_repo.update(obj)
+                self.parent().cache_service.clear()
+                
+                new_obj_values = {
+                    'building_x': obj.building_x, 'building_y': obj.building_y,
+                    'building_width': obj.building_width, 'building_height': obj.building_height
+                }
+                self.parent().audit_service.log_action(
+                    self.parent().user_id, self.parent().username,
+                    'UPDATE', 'Object', obj.id,
+                    old_value=str(old_obj_values), new_value=str(new_obj_values),
+                    description=f"Обновлены координаты объекта '{obj.address}'"
+                )
+                
                 QMessageBox.information(self, "Успех", "Координаты обновлены")
                 self.close()
                 if hasattr(self.parent(), 'refresh_map'):
                     self.parent().refresh_map()
                 BuildingUsersDialog(self.object_id, self.db, self.parent()).exec()
+            except ValueError as e:
+                QMessageBox.warning(self, "Ошибка валидации", str(e))
             except Exception as e:
                 QMessageBox.critical(self, "Ошибка", f"Не удалось обновить координаты: {str(e)}")
     
@@ -1498,7 +1561,14 @@ class MainWindow(QMainWindow):
         if meter_dialog.exec():
             try:
                 meter = meter_dialog.get_meter()
-                self.meter_repo.create(meter)
+                meter_id = self.meter_repo.create(meter)
+                obj = self.object_repo.get_by_id(object_id)
+                self.audit_service.log_action(
+                    self.user_id, self.username,
+                    'CREATE', 'Meter', meter_id,
+                    new_value=f"Тип: {meter.type}, Серийный номер: {meter.serial_number}, Тариф: {meter.tariff}",
+                    description=f"Создан счетчик '{meter.type}' для объекта '{obj.address if obj else object_id}'"
+                )
                 self.load_meters_table()
                 QMessageBox.information(self, "Успех", "Счетчик добавлен")
             except Exception as e:
@@ -1515,10 +1585,25 @@ class MainWindow(QMainWindow):
             if not meter:
                 return
             
+            old_meter_values = {
+                'type': meter.type, 'serial_number': meter.serial_number,
+                'tariff': meter.tariff, 'location': meter.location
+            }
             dialog = MeterDialog(meter.object_id, meter, parent=self)
             if dialog.exec():
                 updated_meter = dialog.get_meter()
                 self.meter_repo.update(updated_meter)
+                obj = self.object_repo.get_by_id(updated_meter.object_id)
+                new_meter_values = {
+                    'type': updated_meter.type, 'serial_number': updated_meter.serial_number,
+                    'tariff': updated_meter.tariff, 'location': updated_meter.location
+                }
+                self.audit_service.log_action(
+                    self.user_id, self.username,
+                    'UPDATE', 'Meter', meter_id,
+                    old_value=str(old_meter_values), new_value=str(new_meter_values),
+                    description=f"Обновлен счетчик '{updated_meter.type}' для объекта '{obj.address if obj else updated_meter.object_id}'"
+                )
                 self.load_meters_table()
                 QMessageBox.information(self, "Успех", "Счетчик обновлен")
         except Exception as e:
@@ -1542,11 +1627,22 @@ class MainWindow(QMainWindow):
             )
             
             if reply == QMessageBox.StandardButton.Yes:
+                old_meter_values = {
+                    'type': meter.type, 'serial_number': meter.serial_number,
+                    'tariff': meter.tariff
+                }
+                obj = self.object_repo.get_by_id(meter.object_id)
                 conn = self.db.get_connection()
                 cursor = conn.cursor()
                 cursor.execute("DELETE FROM Meters WHERE id = ?", (meter_id,))
                 conn.commit()
                 conn.close()
+                self.audit_service.log_action(
+                    self.user_id, self.username,
+                    'DELETE', 'Meter', meter_id,
+                    old_value=str(old_meter_values),
+                    description=f"Удален счетчик '{meter.type}' для объекта '{obj.address if obj else meter.object_id}'"
+                )
                 self.load_meters_table()
                 QMessageBox.information(self, "Успех", "Счетчик удален")
         except Exception as e:
