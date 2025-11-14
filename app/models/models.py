@@ -73,58 +73,96 @@ class ObjectRepository:
         self.db = db
     
     def get_all(self) -> List[Object]:
-        conn = self.db.get_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM Objects ORDER BY address")
-        rows = cursor.fetchall()
-        conn.close()
-        return [Object.from_row(row) for row in rows]
+        conn = None
+        try:
+            conn = self.db.get_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM Objects ORDER BY address")
+            rows = cursor.fetchall()
+            return [Object.from_row(row) for row in rows]
+        except Exception as e:
+            print(f"Ошибка получения объектов: {e}")
+            return []
+        finally:
+            if conn:
+                conn.close()
     
     def get_by_id(self, obj_id: int) -> Optional[Object]:
-        conn = self.db.get_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM Objects WHERE id = ?", (obj_id,))
-        row = cursor.fetchone()
-        conn.close()
-        return Object.from_row(row) if row else None
+        conn = None
+        try:
+            conn = self.db.get_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM Objects WHERE id = ?", (obj_id,))
+            row = cursor.fetchone()
+            return Object.from_row(row) if row else None
+        except Exception as e:
+            print(f"Ошибка получения объекта по ID {obj_id}: {e}")
+            return None
+        finally:
+            if conn:
+                conn.close()
     
     def create(self, obj: Object) -> int:
-        conn = self.db.get_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO Objects (address, area, residents, building_number, 
-                               apartment_number, building_x, building_y, 
-                               building_width, building_height)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (obj.address, obj.area, obj.residents, obj.building_number,
-              obj.apartment_number, obj.building_x, obj.building_y,
-              obj.building_width, obj.building_height))
-        obj_id = cursor.lastrowid
-        conn.commit()
-        conn.close()
-        return obj_id
+        conn = None
+        try:
+            conn = self.db.get_connection()
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO Objects (address, area, residents, building_number, 
+                                   apartment_number, building_x, building_y, 
+                                   building_width, building_height)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (obj.address, obj.area, obj.residents, obj.building_number,
+                  obj.apartment_number, obj.building_x, obj.building_y,
+                  obj.building_width, obj.building_height))
+            obj_id = cursor.lastrowid
+            conn.commit()
+            return obj_id
+        except Exception as e:
+            if conn:
+                conn.rollback()
+            raise Exception(f"Ошибка создания объекта: {e}")
+        finally:
+            if conn:
+                conn.close()
     
     def update(self, obj: Object):
-        conn = self.db.get_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            UPDATE Objects SET address=?, area=?, residents=?, 
-                             building_number=?, apartment_number=?,
-                             building_x=?, building_y=?, 
-                             building_width=?, building_height=?
-            WHERE id=?
-        """, (obj.address, obj.area, obj.residents, obj.building_number,
-              obj.apartment_number, obj.building_x, obj.building_y,
-              obj.building_width, obj.building_height, obj.id))
-        conn.commit()
-        conn.close()
+        conn = None
+        try:
+            conn = self.db.get_connection()
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE Objects SET address=?, area=?, residents=?, 
+                                 building_number=?, apartment_number=?,
+                                 building_x=?, building_y=?, 
+                                 building_width=?, building_height=?
+                WHERE id=?
+            """, (obj.address, obj.area, obj.residents, obj.building_number,
+                  obj.apartment_number, obj.building_x, obj.building_y,
+                  obj.building_width, obj.building_height, obj.id))
+            conn.commit()
+        except Exception as e:
+            if conn:
+                conn.rollback()
+            raise Exception(f"Ошибка обновления объекта: {e}")
+        finally:
+            if conn:
+                conn.close()
     
     def delete(self, obj_id: int):
-        conn = self.db.get_connection()
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM Objects WHERE id = ?", (obj_id,))
-        conn.commit()
-        conn.close()
+        conn = None
+        try:
+            conn = self.db.get_connection()
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM Objects WHERE id = ?", (obj_id,))
+            conn.commit()
+        except Exception as e:
+            if conn:
+                conn.rollback()
+            raise Exception(f"Ошибка удаления объекта: {e}")
+        finally:
+            if conn:
+                conn.close()
 
 class MeterRepository:
     def __init__(self, db: Database):

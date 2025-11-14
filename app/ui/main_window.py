@@ -81,6 +81,8 @@ class CityMapWidget(QWidget):
         self.buildings = []
         self.map_image_paths = ["city_map.png", "city_map.jpg", "city_map.jpeg", "map.png", "map.jpg"]
         self.map_image_path = None
+        self.cached_pixmap = None
+        self.cached_size = None
         self.find_map_image()
         self.load_buildings()
         self.setMinimumSize(800, 600)
@@ -89,22 +91,46 @@ class CityMapWidget(QWidget):
         for path in self.map_image_paths:
             if os.path.exists(path):
                 self.map_image_path = path
+                self.cached_pixmap = None
                 return
         self.map_image_path = None
+        self.cached_pixmap = None
     
     def load_buildings(self):
-        self.buildings = self.object_repo.get_all()
+        try:
+            self.buildings = self.object_repo.get_all()
+        except Exception as e:
+            print(f"Ошибка загрузки зданий: {e}")
+            self.buildings = []
+    
+    def get_scaled_pixmap(self):
+        if not self.map_image_path or not os.path.exists(self.map_image_path):
+            return None
+        
+        current_size = (self.width(), self.height())
+        if self.cached_pixmap is None or self.cached_size != current_size:
+            pixmap = QPixmap(self.map_image_path)
+            if not pixmap.isNull():
+                self.cached_pixmap = pixmap.scaled(
+                    self.width(), self.height(),
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation
+                )
+                self.cached_size = current_size
+            else:
+                return None
+        
+        return self.cached_pixmap
     
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         
-        if self.map_image_path and os.path.exists(self.map_image_path):
-            pixmap = QPixmap(self.map_image_path)
-            if not pixmap.isNull():
-                painter.drawPixmap(0, 0, self.width(), self.height(), pixmap)
-            else:
-                self.draw_placeholder(painter)
+        pixmap = self.get_scaled_pixmap()
+        if pixmap:
+            x_offset = (self.width() - pixmap.width()) // 2
+            y_offset = (self.height() - pixmap.height()) // 2
+            painter.drawPixmap(x_offset, y_offset, pixmap)
         else:
             self.draw_placeholder(painter)
         
@@ -112,18 +138,31 @@ class CityMapWidget(QWidget):
         painter.setBrush(QColor(255, 0, 0, 100))
         
         for building in self.buildings:
-            if building.building_x and building.building_y:
+            if building.building_x is not None and building.building_y is not None:
                 x = int(building.building_x * self.width() / 1000)
                 y = int(building.building_y * self.height() / 1000)
                 w = building.building_width or 50
                 h = building.building_height or 50
                 
-                rect = (x, y, w, h)
-                painter.drawRect(*rect)
-                
-                painter.setPen(QPen(QColor(0, 0, 0), 1))
-                painter.drawText(x, y - 5, building.address[:20])
-                painter.setPen(QPen(QColor(255, 0, 0), 2))
+                if 0 <= x < self.width() and 0 <= y < self.height():
+                    rect = (x, y, w, h)
+                    painter.drawRect(*rect)
+                    
+                    painter.setPen(QPen(QColor(0, 0, 0), 1))
+                    text = building.address[:20] if building.address else ""
+                    painter.drawText(x, max(10, y - 5), text)
+                    painter.setPen(QPen(QColor(255, 0, 0), 2))
+    
+    def resizeEvent(self, event):
+        self.cached_pixmap = None
+        self.cached_size = None
+        super().resizeEvent(event)
+    
+    def refresh(self):
+        self.cached_pixmap = None
+        self.cached_size = None
+        self.load_buildings()
+        self.update()
     
     def draw_placeholder(self, painter):
         painter.fillRect(self.rect(), QColor(200, 230, 255))
@@ -2127,8 +2166,8 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Успех", "Объект добавлен")
     
     def refresh_map(self):
-        self.city_map.load_buildings()
-        self.city_map.update()
+        if hasattr(self, 'city_map'):
+            self.city_map.refresh()
     
     def load_map_image(self):
         filename, _ = QFileDialog.getOpenFileName(
