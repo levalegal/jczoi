@@ -389,7 +389,12 @@ class ReadingDialog(QDialog):
         self.photo_preview = QLabel()
         self.photo_preview.setMaximumSize(200, 200)
         self.photo_preview.setScaledContents(True)
-        self.photo_preview.setStyleSheet("border: 1px solid gray;")
+        self.photo_preview.setStyleSheet("border: 2px dashed gray; background-color: #f0f0f0;")
+        self.photo_preview.setText("Перетащите фото сюда\nили нажмите 'Выбрать фото'")
+        self.photo_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.photo_preview.setAcceptDrops(True)
+        self.photo_preview.dragEnterEvent = self.drag_enter_event
+        self.photo_preview.dropEvent = self.drop_event
         
         form.addRow("Дата:", self.date_edit)
         form.addRow("Показание:", self.value_edit)
@@ -445,16 +450,32 @@ class ReadingDialog(QDialog):
         filename, _ = QFileDialog.getOpenFileName(
             self, "Выбрать фото", "", "Images (*.png *.jpg *.jpeg)")
         if filename:
-            self.photo_path = filename
-            self.photo_label.setText(os.path.basename(filename))
-            
-            pixmap = QPixmap(filename)
-            if not pixmap.isNull():
-                scaled_pixmap = pixmap.scaled(200, 200, Qt.AspectRatioMode.KeepAspectRatio, 
-                                             Qt.TransformationMode.SmoothTransformation)
-                self.photo_preview.setPixmap(scaled_pixmap)
+            self.set_photo(filename)
+    
+    def set_photo(self, filepath):
+        self.photo_path = filepath
+        self.photo_label.setText(os.path.basename(filepath))
+        
+        pixmap = QPixmap(filepath)
+        if not pixmap.isNull():
+            scaled_pixmap = pixmap.scaled(200, 200, Qt.AspectRatioMode.KeepAspectRatio, 
+                                         Qt.TransformationMode.SmoothTransformation)
+            self.photo_preview.setPixmap(scaled_pixmap)
+        else:
+            self.photo_preview.clear()
+    
+    def drag_enter_event(self, event: QDragEnterEvent):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+    
+    def drop_event(self, event: QDropEvent):
+        files = [url.toLocalFile() for url in event.mimeData().urls()]
+        if files:
+            filepath = files[0]
+            if filepath.lower().endswith(('.png', '.jpg', '.jpeg')):
+                self.set_photo(filepath)
             else:
-                self.photo_preview.clear()
+                QMessageBox.warning(self, "Ошибка", "Поддерживаются только изображения (PNG, JPG, JPEG)")
     
     def get_reading(self) -> Reading:
         return Reading(
@@ -512,12 +533,15 @@ class BuildingUsersDialog(QDialog):
         add_reading_btn.clicked.connect(self.add_reading)
         batch_reading_btn = QPushButton("Пакетный ввод")
         batch_reading_btn.clicked.connect(self.batch_reading_from_building)
+        edit_coords_btn = QPushButton("Редактировать координаты")
+        edit_coords_btn.clicked.connect(self.edit_building_coordinates)
         close_btn = QPushButton("Закрыть")
         close_btn.clicked.connect(self.accept)
         
         buttons.addWidget(add_meter_btn)
         buttons.addWidget(add_reading_btn)
         buttons.addWidget(batch_reading_btn)
+        buttons.addWidget(edit_coords_btn)
         buttons.addWidget(close_btn)
         layout.addLayout(buttons)
         
@@ -743,6 +767,64 @@ class BuildingUsersDialog(QDialog):
             self.close()
             BuildingUsersDialog(self.object_id, self.db, self.parent()).exec()
     
+    def edit_building_coordinates(self):
+        obj = self.object_repo.get_by_id(self.object_id)
+        if not obj:
+            return
+        
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Редактирование координат здания")
+        dialog.setModal(True)
+        layout = QVBoxLayout()
+        
+        info_label = QLabel(f"<b>Объект:</b> {obj.address}")
+        layout.addWidget(info_label)
+        
+        coords_group = QGroupBox("Координаты на карте (0-1000)")
+        coords_layout = QFormLayout()
+        
+        x_edit = QLineEdit()
+        x_edit.setText(str(obj.building_x) if obj.building_x else "")
+        y_edit = QLineEdit()
+        y_edit.setText(str(obj.building_y) if obj.building_y else "")
+        w_edit = QLineEdit()
+        w_edit.setText(str(obj.building_width) if obj.building_width else "50")
+        h_edit = QLineEdit()
+        h_edit.setText(str(obj.building_height) if obj.building_height else "50")
+        
+        coords_layout.addRow("X:", x_edit)
+        coords_layout.addRow("Y:", y_edit)
+        coords_layout.addRow("Ширина:", w_edit)
+        coords_layout.addRow("Высота:", h_edit)
+        coords_group.setLayout(coords_layout)
+        layout.addWidget(coords_group)
+        
+        buttons = QHBoxLayout()
+        ok_btn = QPushButton("Сохранить")
+        ok_btn.clicked.connect(dialog.accept)
+        cancel_btn = QPushButton("Отмена")
+        cancel_btn.clicked.connect(dialog.reject)
+        buttons.addWidget(ok_btn)
+        buttons.addWidget(cancel_btn)
+        layout.addLayout(buttons)
+        
+        dialog.setLayout(layout)
+        if dialog.exec():
+            try:
+                obj.building_x = int(x_edit.text()) if x_edit.text().isdigit() else None
+                obj.building_y = int(y_edit.text()) if y_edit.text().isdigit() else None
+                obj.building_width = int(w_edit.text()) if w_edit.text().isdigit() else None
+                obj.building_height = int(h_edit.text()) if h_edit.text().isdigit() else None
+                
+                self.object_repo.update(obj)
+                QMessageBox.information(self, "Успех", "Координаты обновлены")
+                self.close()
+                if hasattr(self.parent(), 'refresh_map'):
+                    self.parent().refresh_map()
+                BuildingUsersDialog(self.object_id, self.db, self.parent()).exec()
+            except Exception as e:
+                QMessageBox.critical(self, "Ошибка", f"Не удалось обновить координаты: {str(e)}")
+    
     def add_meter(self):
         dialog = MeterDialog(self.object_id, parent=self)
         if dialog.exec():
@@ -864,8 +946,17 @@ class MainWindow(QMainWindow):
             self.setup_user_ui()
     
     def setup_admin_ui(self):
-        central = QWidget()
-        self.setCentralWidget(central)
+        tabs = QTabWidget()
+        self.setCentralWidget(tabs)
+        
+        map_tab = self.create_map_tab()
+        audit_tab = self.create_audit_log_tab()
+        
+        tabs.addTab(map_tab, "Карта города")
+        tabs.addTab(audit_tab, "Журнал аудита")
+    
+    def create_map_tab(self):
+        widget = QWidget()
         layout = QVBoxLayout()
         
         notifications_widget = self.create_notifications_widget()
@@ -893,7 +984,139 @@ class MainWindow(QMainWindow):
         buttons.addStretch()
         layout.addLayout(buttons)
         
-        central.setLayout(layout)
+        widget.setLayout(layout)
+        return widget
+    
+    def create_audit_log_tab(self):
+        widget = QWidget()
+        layout = QVBoxLayout()
+        
+        filter_group = QGroupBox("Фильтры")
+        filter_layout = QHBoxLayout()
+        
+        user_filter_label = QLabel("Пользователь:")
+        self.audit_user_filter = QComboBox()
+        self.audit_user_filter.addItem("Все пользователи", None)
+        users = self.user_repo.get_all()
+        for user in users:
+            self.audit_user_filter.addItem(f"{user.username} ({user.full_name or 'без имени'})", user.id)
+        
+        entity_filter_label = QLabel("Тип сущности:")
+        self.audit_entity_filter = QComboBox()
+        self.audit_entity_filter.addItem("Все типы", None)
+        self.audit_entity_filter.addItem("Object", "Object")
+        self.audit_entity_filter.addItem("Meter", "Meter")
+        self.audit_entity_filter.addItem("Reading", "Reading")
+        self.audit_entity_filter.addItem("User", "User")
+        
+        action_filter_label = QLabel("Действие:")
+        self.audit_action_filter = QComboBox()
+        self.audit_action_filter.addItem("Все действия", None)
+        self.audit_action_filter.addItem("CREATE", "CREATE")
+        self.audit_action_filter.addItem("UPDATE", "UPDATE")
+        self.audit_action_filter.addItem("DELETE", "DELETE")
+        self.audit_action_filter.addItem("LOGIN", "LOGIN")
+        
+        filter_btn = QPushButton("Применить")
+        filter_btn.clicked.connect(self.load_audit_logs)
+        export_btn = QPushButton("Экспорт")
+        export_btn.clicked.connect(self.export_audit_logs)
+        
+        filter_layout.addWidget(user_filter_label)
+        filter_layout.addWidget(self.audit_user_filter)
+        filter_layout.addWidget(entity_filter_label)
+        filter_layout.addWidget(self.audit_entity_filter)
+        filter_layout.addWidget(action_filter_label)
+        filter_layout.addWidget(self.audit_action_filter)
+        filter_layout.addWidget(filter_btn)
+        filter_layout.addWidget(export_btn)
+        filter_layout.addStretch()
+        filter_group.setLayout(filter_layout)
+        layout.addWidget(filter_group)
+        
+        self.audit_table = QTableWidget()
+        self.audit_table.setColumnCount(7)
+        self.audit_table.setHorizontalHeaderLabels(["Дата", "Пользователь", "Действие", "Тип", "ID", "Описание", "Изменения"])
+        self.audit_table.horizontalHeader().setStretchLastSection(True)
+        self.audit_table.setSortingEnabled(True)
+        self.audit_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        
+        layout.addWidget(self.audit_table)
+        
+        self.load_audit_logs()
+        
+        widget.setLayout(layout)
+        return widget
+    
+    def load_audit_logs(self):
+        user_id = self.audit_user_filter.currentData() if hasattr(self, 'audit_user_filter') else None
+        entity_type = self.audit_entity_filter.currentData() if hasattr(self, 'audit_entity_filter') else None
+        action_type = self.audit_action_filter.currentData() if hasattr(self, 'audit_action_filter') else None
+        
+        logs = self.audit_service.get_logs(user_id=user_id, entity_type=entity_type, limit=500)
+        
+        if action_type:
+            logs = [log for log in logs if log.get('action_type') == action_type]
+        
+        self.audit_table.setRowCount(len(logs))
+        for i, log in enumerate(logs):
+            created_at = log.get('created_at', '')
+            if isinstance(created_at, str):
+                date_str = created_at
+            else:
+                date_str = str(created_at)
+            
+            username = log.get('username', 'N/A')
+            action = log.get('action_type', '')
+            entity = log.get('entity_type', '')
+            entity_id = str(log.get('entity_id', '')) if log.get('entity_id') else ''
+            description = log.get('description', '')
+            
+            changes = ""
+            if log.get('old_value'):
+                changes += f"Было: {log['old_value']}\n"
+            if log.get('new_value'):
+                changes += f"Стало: {log['new_value']}"
+            
+            self.audit_table.setItem(i, 0, QTableWidgetItem(date_str))
+            self.audit_table.setItem(i, 1, QTableWidgetItem(username))
+            self.audit_table.setItem(i, 2, QTableWidgetItem(action))
+            self.audit_table.setItem(i, 3, QTableWidgetItem(entity))
+            self.audit_table.setItem(i, 4, QTableWidgetItem(entity_id))
+            self.audit_table.setItem(i, 5, QTableWidgetItem(description))
+            self.audit_table.setItem(i, 6, QTableWidgetItem(changes))
+    
+    def export_audit_logs(self):
+        filename, _ = QFileDialog.getSaveFileName(
+            self, "Экспорт логов аудита", "", 
+            "CSV файлы (*.csv);;Excel файлы (*.xlsx);;Все файлы (*.*)")
+        
+        if not filename:
+            return
+        
+        try:
+            import pandas as pd
+            
+            user_id = self.audit_user_filter.currentData() if hasattr(self, 'audit_user_filter') else None
+            entity_type = self.audit_entity_filter.currentData() if hasattr(self, 'audit_entity_filter') else None
+            action_type = self.audit_action_filter.currentData() if hasattr(self, 'audit_action_filter') else None
+            
+            logs = self.audit_service.get_logs(user_id=user_id, entity_type=entity_type, limit=10000)
+            
+            if action_type:
+                logs = [log for log in logs if log.get('action_type') == action_type]
+            
+            df = pd.DataFrame(logs)
+            if not df.empty:
+                if filename.endswith('.xlsx'):
+                    df.to_excel(filename, index=False)
+                else:
+                    df.to_csv(filename, index=False, encoding='utf-8-sig')
+                QMessageBox.information(self, "Успех", f"Логи экспортированы: {filename}")
+            else:
+                QMessageBox.warning(self, "Предупреждение", "Нет данных для экспорта")
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось экспортировать логи: {str(e)}")
     
     def create_notifications_widget(self):
         group = QGroupBox("Уведомления")
