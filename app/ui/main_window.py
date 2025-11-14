@@ -466,18 +466,56 @@ class ReadingDialog(QDialog):
         self.setLayout(layout)
     
     def validate_and_accept(self):
-        if self.value_edit.value() < 0:
+        value = self.value_edit.value()
+        reading_date = self.date_edit.date().toPyDate()
+        
+        if value < 0:
             QMessageBox.warning(self, "Ошибка валидации", "Показание не может быть отрицательным")
             self.value_edit.setFocus()
             return
         
-        if self.last_reading and self.value_edit.value() < self.last_reading.value:
-            QMessageBox.warning(
-                self, "Ошибка валидации",
-                f"Показание не может быть меньше предыдущего ({self.last_reading.value})"
-            )
-            self.value_edit.setFocus()
-            return
+        if self.last_reading:
+            if value < self.last_reading.value:
+                QMessageBox.warning(
+                    self, "Ошибка валидации",
+                    f"Показание не может быть меньше предыдущего ({self.last_reading.value})"
+                )
+                self.value_edit.setFocus()
+                return
+            
+            if value == self.last_reading.value:
+                reply = QMessageBox.question(
+                    self, "Подтверждение",
+                    "Показание совпадает с предыдущим. Продолжить?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                )
+                if reply == QMessageBox.StandardButton.No:
+                    return
+            
+            consumption = value - self.last_reading.value
+            days_diff = (reading_date - self.last_reading.reading_date).days
+            if days_diff > 0:
+                daily_avg = consumption / days_diff
+                if daily_avg > 100:
+                    reply = QMessageBox.question(
+                        self, "Предупреждение",
+                        f"Обнаружено большое потребление: {consumption:.2f} за {days_diff} дней\n"
+                        f"(в среднем {daily_avg:.2f} в день). Продолжить?",
+                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                    )
+                    if reply == QMessageBox.StandardButton.No:
+                        return
+        
+        if self.db:
+            reading_repo = ReadingRepository(self.db)
+            existing_readings = reading_repo.get_by_meter_id(self.meter_id)
+            for existing in existing_readings:
+                if existing.reading_date == reading_date and abs(existing.value - value) < 0.01:
+                    QMessageBox.warning(
+                        self, "Ошибка валидации",
+                        f"Показание с такой датой и значением уже существует"
+                    )
+                    return
         
         if self.date_edit.date() > QDate.currentDate():
             reply = QMessageBox.question(
@@ -1525,19 +1563,23 @@ class MainWindow(QMainWindow):
         return widget
     
     def load_meters_table(self):
-        objects = self.object_repo.get_all()
-        all_meters = []
-        for obj in objects:
-            meters = self.meter_repo.get_by_object_id(obj.id)
-            all_meters.extend([(m, obj) for m in meters])
-        
-        self.meters_table.setRowCount(len(all_meters))
-        for i, (meter, obj) in enumerate(all_meters):
-            self.meters_table.setItem(i, 0, QTableWidgetItem(str(meter.id)))
-            self.meters_table.setItem(i, 1, QTableWidgetItem(meter.type))
-            self.meters_table.setItem(i, 2, QTableWidgetItem(meter.serial_number or ""))
-            self.meters_table.setItem(i, 3, QTableWidgetItem(str(meter.tariff)))
-            self.meters_table.setItem(i, 4, QTableWidgetItem(obj.address))
+        self.meters_table.setUpdatesEnabled(False)
+        try:
+            objects = self.object_repo.get_all()
+            all_meters = []
+            for obj in objects:
+                meters = self.meter_repo.get_by_object_id(obj.id)
+                all_meters.extend([(m, obj) for m in meters])
+            
+            self.meters_table.setRowCount(len(all_meters))
+            for i, (meter, obj) in enumerate(all_meters):
+                self.meters_table.setItem(i, 0, QTableWidgetItem(str(meter.id)))
+                self.meters_table.setItem(i, 1, QTableWidgetItem(meter.type))
+                self.meters_table.setItem(i, 2, QTableWidgetItem(meter.serial_number or ""))
+                self.meters_table.setItem(i, 3, QTableWidgetItem(str(meter.tariff)))
+                self.meters_table.setItem(i, 4, QTableWidgetItem(obj.address))
+        finally:
+            self.meters_table.setUpdatesEnabled(True)
     
     def filter_meters_table(self, text):
         for i in range(self.meters_table.rowCount()):
@@ -1816,15 +1858,19 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'readings_page_label'):
             self.readings_page_label.setText(f"Страница: {self.readings_current_page} из {total_pages} (Всего: {len(all_readings)})")
         
-        self.readings_table.setRowCount(len(page_readings))
-        for i, (reading, meter, obj, calc) in enumerate(page_readings):
-            self.readings_table.setItem(i, 0, QTableWidgetItem(str(reading.id)))
-            self.readings_table.setItem(i, 1, QTableWidgetItem(obj.address))
-            self.readings_table.setItem(i, 2, QTableWidgetItem(meter.type))
-            self.readings_table.setItem(i, 3, QTableWidgetItem(str(reading.reading_date)))
-            self.readings_table.setItem(i, 4, QTableWidgetItem(str(reading.value)))
-            self.readings_table.setItem(i, 5, QTableWidgetItem(str(calc.get('consumption', 0)) if calc else "0"))
-            self.readings_table.setItem(i, 6, QTableWidgetItem(str(calc.get('amount', 0)) if calc else "0"))
+        self.readings_table.setUpdatesEnabled(False)
+        try:
+            self.readings_table.setRowCount(len(page_readings))
+            for i, (reading, meter, obj, calc) in enumerate(page_readings):
+                self.readings_table.setItem(i, 0, QTableWidgetItem(str(reading.id)))
+                self.readings_table.setItem(i, 1, QTableWidgetItem(obj.address))
+                self.readings_table.setItem(i, 2, QTableWidgetItem(meter.type))
+                self.readings_table.setItem(i, 3, QTableWidgetItem(str(reading.reading_date)))
+                self.readings_table.setItem(i, 4, QTableWidgetItem(str(reading.value)))
+                self.readings_table.setItem(i, 5, QTableWidgetItem(str(calc.get('consumption', 0)) if calc else "0"))
+                self.readings_table.setItem(i, 6, QTableWidgetItem(str(calc.get('amount', 0)) if calc else "0"))
+        finally:
+            self.readings_table.setUpdatesEnabled(True)
     
     def prev_readings_page(self):
         if self.readings_current_page > 1:
