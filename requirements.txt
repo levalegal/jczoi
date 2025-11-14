@@ -4,5 +4,4 @@ matplotlib
 openpyxl
 Pillow
 reportlab
-reportlab
 
