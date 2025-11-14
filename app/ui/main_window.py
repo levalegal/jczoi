@@ -10,7 +10,7 @@ from datetime import date, datetime, timedelta
 import os
 from app.database import Database
 from app.models import Object, Meter, Reading, ObjectRepository, MeterRepository, ReadingRepository, UserRepository
-from app.services import CalculationService, ReportGenerator, ChartWidget, NotificationService, ReceiptGenerator
+from app.services import CalculationService, ReportGenerator, ChartWidget, NotificationService, ReceiptGenerator, ImportService, AuditService
 from app.ui.batch_reading_dialog import BatchReadingDialog
 
 class LoginDialog(QDialog):
