@@ -10,7 +10,7 @@ from datetime import date, datetime, timedelta
 import os
 from app.database import Database
 from app.models import Object, Meter, Reading, ObjectRepository, MeterRepository, ReadingRepository, UserRepository
-from app.services import CalculationService, ReportGenerator, ChartWidget, NotificationService, ReceiptGenerator, ImportService, AuditService
+from app.services import CalculationService, ReportGenerator, ChartWidget, NotificationService, ReceiptGenerator, ImportService, AuditService, AuthService
 from app.ui.batch_reading_dialog import BatchReadingDialog
 
 class LoginDialog(QDialog):
@@ -54,15 +54,20 @@ class LoginDialog(QDialog):
         conn = self.db.get_connection()
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT id, role FROM Users 
-            WHERE username = ? AND password = ?
-        """, (username, password))
+            SELECT id, role, password FROM Users 
+            WHERE username = ?
+        """, (username,))
         result = cursor.fetchone()
         conn.close()
         
         if result:
-            self.user_id, self.user_role = result
-            self.accept()
+            user_id, user_role, stored_password = result
+            if AuthService.verify_password(password, stored_password):
+                self.user_id = user_id
+                self.user_role = user_role
+                self.accept()
+            else:
+                QMessageBox.warning(self, "Ошибка", "Неверный логин или пароль")
         else:
             QMessageBox.warning(self, "Ошибка", "Неверный логин или пароль")
 
@@ -1593,9 +1598,24 @@ class MainWindow(QMainWindow):
         self.readings_table.setSortingEnabled(True)
         self.readings_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         
+        pagination_layout = QHBoxLayout()
+        self.readings_page_label = QLabel("Страница: 1")
+        prev_btn = QPushButton("◄ Предыдущая")
+        prev_btn.clicked.connect(self.prev_readings_page)
+        next_btn = QPushButton("Следующая ►")
+        next_btn.clicked.connect(self.next_readings_page)
+        self.readings_current_page = 1
+        self.readings_page_size = 50
+        
+        pagination_layout.addWidget(self.readings_page_label)
+        pagination_layout.addWidget(prev_btn)
+        pagination_layout.addWidget(next_btn)
+        pagination_layout.addStretch()
+        
         self.load_readings_table()
         
         layout.addWidget(self.readings_table)
+        layout.addLayout(pagination_layout)
         widget.setLayout(layout)
         return widget
     
@@ -1630,8 +1650,18 @@ class MainWindow(QMainWindow):
         
         all_readings.sort(key=lambda x: x[0].reading_date, reverse=True)
         
-        self.readings_table.setRowCount(len(all_readings))
-        for i, (reading, meter, obj, calc) in enumerate(all_readings):
+        total_pages = (len(all_readings) + self.readings_page_size - 1) // self.readings_page_size if all_readings else 1
+        if self.readings_current_page > total_pages:
+            self.readings_current_page = max(1, total_pages)
+        start_idx = (self.readings_current_page - 1) * self.readings_page_size
+        end_idx = start_idx + self.readings_page_size
+        page_readings = all_readings[start_idx:end_idx]
+        
+        if hasattr(self, 'readings_page_label'):
+            self.readings_page_label.setText(f"Страница: {self.readings_current_page} из {total_pages} (Всего: {len(all_readings)})")
+        
+        self.readings_table.setRowCount(len(page_readings))
+        for i, (reading, meter, obj, calc) in enumerate(page_readings):
             self.readings_table.setItem(i, 0, QTableWidgetItem(str(reading.id)))
             self.readings_table.setItem(i, 1, QTableWidgetItem(obj.address))
             self.readings_table.setItem(i, 2, QTableWidgetItem(meter.type))
@@ -1639,6 +1669,15 @@ class MainWindow(QMainWindow):
             self.readings_table.setItem(i, 4, QTableWidgetItem(str(reading.value)))
             self.readings_table.setItem(i, 5, QTableWidgetItem(str(calc.get('consumption', 0)) if calc else "0"))
             self.readings_table.setItem(i, 6, QTableWidgetItem(str(calc.get('amount', 0)) if calc else "0"))
+    
+    def prev_readings_page(self):
+        if self.readings_current_page > 1:
+            self.readings_current_page -= 1
+            self.load_readings_table()
+    
+    def next_readings_page(self):
+        self.readings_current_page += 1
+        self.load_readings_table()
     
     def filter_readings_table(self):
         self.load_readings_table()

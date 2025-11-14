@@ -143,13 +143,26 @@ class Database:
         ).fetchone()[0]
         
         if admin_exists == 0:
+            from app.services.auth_service import AuthService
+            hashed_password = AuthService.hash_password(Config.DEFAULT_ADMIN_PASSWORD)
             cursor.execute("""
                 INSERT INTO Users (username, password, role, full_name)
                 VALUES (?, ?, 'admin', 'Администратор')
-            """, (Config.DEFAULT_ADMIN_USERNAME, Config.DEFAULT_ADMIN_PASSWORD))
+            """, (Config.DEFAULT_ADMIN_USERNAME, hashed_password))
+        else:
+            from app.services.auth_service import AuthService
+            cursor.execute("SELECT password FROM Users WHERE username = ?", (Config.DEFAULT_ADMIN_USERNAME,))
+            admin_password = cursor.fetchone()
+            if admin_password and not admin_password[0].startswith('$2b$'):
+                hashed_password = AuthService.hash_password(Config.DEFAULT_ADMIN_PASSWORD)
+                cursor.execute("UPDATE Users SET password = ? WHERE username = ?", 
+                             (hashed_password, Config.DEFAULT_ADMIN_USERNAME))
         
         conn.commit()
         conn.close()
+        
+        from app.services.auth_service import AuthService
+        AuthService.migrate_passwords(self)
     
     def backup_database(self, backup_path: Optional[str] = None):
         if backup_path is None:

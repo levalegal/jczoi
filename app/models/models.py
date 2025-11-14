@@ -44,7 +44,7 @@ class Meter:
     installation_date: Optional[date]
     verification_date: Optional[date]
     next_verification_date: Optional[date]
-    tariff: float
+    tariff: float # TO DO REDESIGNER 
     unit: str
     location: Optional[str]
     is_active: int
@@ -227,7 +227,7 @@ class ReadingRepository:
 
 class UserRepository:
     def __init__(self, db: Database):
-        self.db = db
+        self.db = db # TO DO SENSICTION
     
     def get_all(self) -> List[User]:
         conn = self.db.get_connection()
@@ -253,7 +253,13 @@ class UserRepository:
         conn.close()
         return User.from_row(row) if row else None
     
-    def get_objects_by_user(self, user_id: int) -> List[Object]:
+    def get_objects_by_user(self, user_id: int, cache_service=None) -> List[Object]:
+        cache_key = f"user_objects_{user_id}"
+        if cache_service:
+            cached = cache_service.get(cache_key)
+            if cached is not None:
+                return cached
+        
         conn = self.db.get_connection()
         cursor = conn.cursor()
         cursor.execute("""
@@ -263,7 +269,12 @@ class UserRepository:
         """, (user_id,))
         rows = cursor.fetchall()
         conn.close()
-        return [Object.from_row(row) for row in rows]
+        result = [Object.from_row(row) for row in rows]
+        
+        if cache_service:
+            cache_service.set(cache_key, result, ttl_seconds=300)
+        
+        return result
     
     def get_users_by_object(self, object_id: int) -> List[User]:
         conn = self.db.get_connection()
@@ -279,7 +290,7 @@ class UserRepository:
     
     def assign_object_to_user(self, user_id: int, object_id: int):
         conn = self.db.get_connection()
-        cursor = conn.cursor()
+        cursor = conn.cursor() # TO DO SO BAG OR DECSTOP PULL 
         cursor.execute("""
             INSERT OR IGNORE INTO UserObjects (user_id, object_id)
             VALUES (?, ?)
