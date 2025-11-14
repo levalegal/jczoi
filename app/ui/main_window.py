@@ -1424,14 +1424,17 @@ class MainWindow(QMainWindow):
         return widget
     
     def load_objects_table(self):
-        objects = self.object_repo.get_all()
-        self.objects_table.setRowCount(len(objects))
-        
-        for i, obj in enumerate(objects):
-            self.objects_table.setItem(i, 0, QTableWidgetItem(str(obj.id)))
-            self.objects_table.setItem(i, 1, QTableWidgetItem(obj.address))
-            self.objects_table.setItem(i, 2, QTableWidgetItem(str(obj.area) if obj.area else ""))
-            self.objects_table.setItem(i, 3, QTableWidgetItem(str(obj.residents) if obj.residents else ""))
+        self.objects_table.setUpdatesEnabled(False)
+        try:
+            objects = self.object_repo.get_all()
+            self.objects_table.setRowCount(len(objects))
+            for i, obj in enumerate(objects):
+                self.objects_table.setItem(i, 0, QTableWidgetItem(str(obj.id)))
+                self.objects_table.setItem(i, 1, QTableWidgetItem(obj.address))
+                self.objects_table.setItem(i, 2, QTableWidgetItem(str(obj.area) if obj.area else ""))
+                self.objects_table.setItem(i, 3, QTableWidgetItem(str(obj.residents) if obj.residents else ""))
+        finally:
+            self.objects_table.setUpdatesEnabled(True)
     
     def filter_objects_table(self, text):
         for i in range(self.objects_table.rowCount()):
