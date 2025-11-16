@@ -4,15 +4,16 @@ from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QLineEdit, QDateEdit, QDoubleSpinBox, QComboBox,
                              QFileDialog, QGroupBox, QFormLayout, QTextEdit,
                              QHeaderView, QMenu, QAbstractItemView, QStatusBar,
-                             QCheckBox)
-from PyQt6.QtCore import Qt, QDate, pyqtSignal
-from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QAction, QContextMenuEvent, QDragEnterEvent, QDropEvent
+                             QCheckBox, QToolTip, QToolBar)
+from PyQt6.QtCore import Qt, QDate, pyqtSignal, QPointF
+from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QAction, QContextMenuEvent, QDragEnterEvent, QDropEvent, QIcon
 from datetime import date, datetime, timedelta
 import os
 from app.database import Database
 from app.models import Object, Meter, Reading, ObjectRepository, MeterRepository, ReadingRepository, UserRepository
 from app.services import CalculationService, ReportGenerator, ChartWidget, NotificationService, ReceiptGenerator, ImportService, AuditService, AuthService
 from app.ui.batch_reading_dialog import BatchReadingDialog
+from app.utils.settings import Settings
 
 class LoginDialog(QDialog):
     def __init__(self, db: Database, parent=None):
@@ -108,16 +109,52 @@ class LoginDialog(QDialog):
 
 class CityMapWidget(QWidget):
     building_clicked = pyqtSignal(int)
+    building_moved = pyqtSignal(int, int, int)
     
     def __init__(self, db: Database, parent=None):
         super().__init__(parent)
         self.db = db
         self.object_repo = ObjectRepository(db)
         self.buildings = []
-        self.map_image_paths = ["city_map.png", "city_map.jpg", "city_map.jpeg", "map.png", "map.jpg"]
+        # Используем только две карты из папки img: дневную и ночную
+        self.map_image_paths = [
+            os.path.join("app", "img", "day.png"),
+            os.path.join("app", "img", "night.png"),
+        ]
         self.map_image_path = None
         self.cached_pixmap = None
         self.cached_size = None
+
+        # Перетаскивание зданий
+        self.dragging_building = None
+        self.drag_start_pos = None
+        self.building_start_coords = None
+        self.edit_mode = False
+        self.selected_building_id = None
+        self.zoom_factor = 1.0
+        self.min_zoom = 0.5
+        self.max_zoom = 2.5
+        self.pan_offset = QPointF(0, 0)
+        self.panning = False
+        self.pan_start_pos = None
+
+    def zoom_in(self):
+        new_zoom = self.zoom_factor * 1.1
+        self.zoom_factor = min(self.max_zoom, new_zoom)
+        self.update()
+
+    def zoom_out(self):
+        new_zoom = self.zoom_factor / 1.1
+        self.zoom_factor = max(self.min_zoom, new_zoom)
+        self.update()
+
+    def wheelEvent(self, event):
+        delta = event.angleDelta().y()
+        if delta > 0:
+            self.zoom_in()
+        elif delta < 0:
+            self.zoom_out()
+
         self.find_map_image()
         self.load_buildings()
         self.setMinimumSize(800, 600)
@@ -160,6 +197,8 @@ class CityMapWidget(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.translate(self.pan_offset)
+        painter.scale(self.zoom_factor, self.zoom_factor)
         
         pixmap = self.get_scaled_pixmap()
         if pixmap:
@@ -169,9 +208,6 @@ class CityMapWidget(QWidget):
         else:
             self.draw_placeholder(painter)
         
-        painter.setPen(QPen(QColor(255, 0, 0), 2))
-        painter.setBrush(QColor(255, 0, 0, 100))
-        
         for building in self.buildings:
             if building.building_x is not None and building.building_y is not None:
                 x = int(building.building_x * self.width() / 1000)
@@ -180,13 +216,18 @@ class CityMapWidget(QWidget):
                 h = building.building_height or 50
                 
                 if 0 <= x < self.width() and 0 <= y < self.height():
-                    rect = (x, y, w, h)
-                    painter.drawRect(*rect)
-                    
+                    if building.id == self.selected_building_id:
+                        painter.setPen(QPen(QColor(0, 120, 255), 3))
+                        painter.setBrush(QColor(0, 120, 255, 120))
+                    else:
+                        painter.setPen(QPen(QColor(255, 0, 0), 2))
+                        painter.setBrush(QColor(255, 0, 0, 100))
+
+                    painter.drawRect(x, y, w, h)
+
                     painter.setPen(QPen(QColor(0, 0, 0), 1))
                     text = building.address[:20] if building.address else ""
                     painter.drawText(x, max(10, y - 5), text)
-                    painter.setPen(QPen(QColor(255, 0, 0), 2))
     
     def resizeEvent(self, event):
         self.cached_pixmap = None
@@ -206,19 +247,109 @@ class CityMapWidget(QWidget):
         painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, text)
     
     def mousePressEvent(self, event):
-        x = event.position().x()
-        y = event.position().y()
-        
-        for building in self.buildings:
-            if building.building_x and building.building_y:
-                bx = int(building.building_x * self.width() / 1000)
-                by = int(building.building_y * self.height() / 1000)
-                bw = building.building_width or 50
-                bh = building.building_height or 50
-                
-                if bx <= x <= bx + bw and by <= y <= by + bh:
-                    self.building_clicked.emit(building.id)
-                    break
+        if event.button() == Qt.MouseButton.LeftButton and self.edit_mode:
+            x = event.position().x()
+            y = event.position().y()
+
+            for building in self.buildings:
+                if building.building_x is not None and building.building_y is not None:
+                    bx = int(building.building_x * self.width() / 1000)
+                    by = int(building.building_y * self.height() / 1000)
+                    bw = building.building_width or 50
+                    bh = building.building_height or 50
+
+                    if bx <= x <= bx + bw and by <= y <= by + bh:
+                        self.selected_building_id = building.id
+                        self.dragging_building = building
+                        self.drag_start_pos = event.position()
+                        self.building_start_coords = (building.building_x or 0, building.building_y or 0)
+                        self.building_clicked.emit(building.id)
+                        break
+        elif event.button() == Qt.MouseButton.MiddleButton:
+            self.panning = True
+            self.pan_start_pos = event.position()
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self.dragging_building and self.drag_start_pos is not None and self.building_start_coords is not None:
+            dx = event.position().x() - self.drag_start_pos.x()
+            dy = event.position().y() - self.drag_start_pos.y()
+
+            # Переводим смещение пикселей в координаты 0-1000
+            start_x_coord, start_y_coord = self.building_start_coords
+
+            # исходные пиксели
+            start_px_x = start_x_coord * self.width() / 1000 if self.width() > 0 else 0
+            start_px_y = start_y_coord * self.height() / 1000 if self.height() > 0 else 0
+
+            new_px_x = start_px_x + dx
+            new_px_y = start_px_y + dy
+
+            if self.width() > 0:
+                new_x_coord = int(max(0, min(1000, new_px_x * 1000 / self.width())))
+            else:
+                new_x_coord = start_x_coord
+
+            if self.height() > 0:
+                new_y_coord = int(max(0, min(1000, new_px_y * 1000 / self.height())))
+            else:
+                new_y_coord = start_y_coord
+
+            self.dragging_building.building_x = new_x_coord
+            self.dragging_building.building_y = new_y_coord
+            self.update()
+
+        if self.panning and self.pan_start_pos is not None:
+            dx = event.position().x() - self.pan_start_pos.x()
+            dy = event.position().y() - self.pan_start_pos.y()
+            self.pan_offset += QPointF(dx, dy)
+            self.pan_start_pos = event.position()
+            self.update()
+
+        if not self.edit_mode:
+            x = event.position().x()
+            y = event.position().y()
+            tooltip_text = ""
+            for building in self.buildings:
+                if building.building_x is not None and building.building_y is not None:
+                    bx = int(building.building_x * self.width() / 1000)
+                    by = int(building.building_y * self.height() / 1000)
+                    bw = building.building_width or 50
+                    bh = building.building_height or 50
+                    if bx <= x <= bx + bw and by <= y <= by + bh:
+                        address = building.address or ""
+                        tooltip_text = f"#{building.id} {address}\nX={building.building_x}, Y={building.building_y}"
+                        break
+            if tooltip_text:
+                QToolTip.showText(event.globalPosition().toPoint(), tooltip_text, self)
+            else:
+                QToolTip.hideText()
+
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self.dragging_building:
+            # Сохраняем новые координаты здания в БД
+            try:
+                self.object_repo.update(self.dragging_building)
+                if self.dragging_building.building_x is not None and self.dragging_building.building_y is not None:
+                    self.building_moved.emit(
+                        self.dragging_building.id,
+                        int(self.dragging_building.building_x),
+                        int(self.dragging_building.building_y),
+                    )
+            except Exception as e:
+                print(f"Ошибка сохранения координат здания: {e}")
+
+            self.dragging_building = None
+            self.drag_start_pos = None
+            self.building_start_coords = None
+
+        if event.button() == Qt.MouseButton.MiddleButton and self.panning:
+            self.panning = False
+            self.pan_start_pos = None
+
+        super().mouseReleaseEvent(event)
 
 class ObjectDialog(QDialog):
     def __init__(self, obj: Object = None, parent=None):
@@ -1137,6 +1268,7 @@ class BuildingUsersDialog(QDialog):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
+        self.settings = Settings()
         self.db = Database()
         self.object_repo = ObjectRepository(self.db)
         self.meter_repo = MeterRepository(self.db)
@@ -1157,20 +1289,131 @@ class MainWindow(QMainWindow):
         self.username = None
         self.readings_current_page = 1
         self.readings_page_size = 50
+        self.current_theme = self.settings.get('theme', 'day')
+        self.icon_base_path = os.path.join("app", "img")
         
         self.backup_service.start_auto_backup(24)
         self.backup_service.cleanup_old_backups(30)
         
         self.setWindowTitle("Система учета показаний счетчиков ЖКХ")
+        self.init_menu_and_status_bar()
+        self.apply_theme(self.current_theme)
+        app_icon = self.load_icon("app_icon.png")
+        if not app_icon.isNull():
+            self.setWindowIcon(app_icon)
         self.show_login()
     
     def closeEvent(self, event):
-        from app.utils.settings import Settings
-        settings = Settings()
         geometry = self.geometry()
-        settings.set_window_geometry(geometry.x(), geometry.y(), 
-                                    geometry.width(), geometry.height())
+        self.settings.set_window_geometry(geometry.x(), geometry.y(),
+                                          geometry.width(), geometry.height())
         event.accept()
+
+    def init_menu_and_status_bar(self):
+        status = QStatusBar()
+        self.setStatusBar(status)
+        status.showMessage("Готово")
+
+        menu_bar = self.menuBar()
+
+        file_menu = menu_bar.addMenu("Файл")
+        exit_action = QAction("Выход", self)
+        exit_action.setShortcut("Ctrl+Q")
+        exit_action.triggered.connect(self.close)
+        file_menu.addAction(exit_action)
+
+        view_menu = menu_bar.addMenu("Вид")
+
+        theme_menu = QMenu("Тема", self)
+
+        day_action = QAction("Дневная", self)
+        day_action.triggered.connect(lambda: self.set_theme('day'))
+        theme_menu.addAction(day_action)
+
+        night_action = QAction("Ночная", self)
+        night_action.triggered.connect(lambda: self.set_theme('night'))
+        theme_menu.addAction(night_action)
+
+        view_menu.addMenu(theme_menu)
+
+        help_menu = menu_bar.addMenu("Справка")
+        about_action = QAction("О программе", self)
+        about_action.triggered.connect(self.show_about_dialog)
+        help_menu.addAction(about_action)
+
+        toolbar = QToolBar("Главная", self)
+        toolbar.setMovable(False)
+        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, toolbar)
+
+        action_day = QAction(self.load_icon("icon_sun.png"), "День", self)
+        action_day.triggered.connect(lambda: self.set_theme("day"))
+        toolbar.addAction(action_day)
+
+        action_night = QAction(self.load_icon("icon_moon.png"), "Ночь", self)
+        action_night.triggered.connect(lambda: self.set_theme("night"))
+        toolbar.addAction(action_night)
+
+        toolbar.addSeparator()
+
+        action_add_building = QAction(self.load_icon("icon_add_building.png"), "Добавить здание", self)
+        action_add_building.triggered.connect(self.add_object)
+        toolbar.addAction(action_add_building)
+
+        action_refresh_map = QAction(self.load_icon("icon_refresh.png"), "Обновить карту", self)
+        action_refresh_map.triggered.connect(self.refresh_map)
+        toolbar.addAction(action_refresh_map)
+
+        action_backup = QAction(self.load_icon("icon_backup.png"), "Резервная копия", self)
+        action_backup.triggered.connect(self.create_manual_backup)
+        toolbar.addAction(action_backup)
+
+    def load_icon(self, filename: str) -> QIcon:
+        path = os.path.join(self.icon_base_path, filename)
+        if os.path.exists(path):
+            return QIcon(path)
+        return QIcon()
+
+    def show_about_dialog(self):
+        QMessageBox.information(
+            self,
+            "О программе",
+            "Система учета показаний счетчиков ЖКХ\n"
+            "Поддержка карты города, тем день/ночь и импорта показаний."
+        )
+    def set_theme(self, theme_name: str):
+        if theme_name not in ("day", "night"):
+            return
+
+        self.current_theme = theme_name
+        self.settings.set("theme", theme_name)
+        self.apply_theme(theme_name)
+
+        # Обновляем карту, чтобы она подхватила нужное изображение
+        if hasattr(self, "city_map"):
+            # Для надёжности заново выбираем картинку
+            if theme_name == "day":
+                self.city_map.map_image_path = os.path.join("app", "img", "day.png")
+            else:
+                self.city_map.map_image_path = os.path.join("app", "img", "night.png")
+            self.city_map.cached_pixmap = None
+            self.city_map.cached_size = None
+            self.city_map.update()
+
+    def apply_theme(self, theme_name: str):
+        if theme_name == "night":
+            qss_path = os.path.join("app", "themes", "night.qss")
+        else:
+            qss_path = os.path.join("app", "themes", "day.qss")
+
+        try:
+            with open(qss_path, "r", encoding="utf-8") as f:
+                style = f.read()
+                self.setStyleSheet(style)
+        except Exception:
+            if theme_name == "night":
+                self.setStyleSheet("QMainWindow, QWidget { background-color: #202020; color: #e0e0e0; }")
+            else:
+                self.setStyleSheet("QMainWindow, QWidget { background-color: #f4f6f9; color: #202020; }")
     
     def show_login(self):
         login = LoginDialog(self.db, self)
@@ -1212,17 +1455,54 @@ class MainWindow(QMainWindow):
         
         self.city_map = CityMapWidget(self.db)
         self.city_map.building_clicked.connect(self.on_building_clicked)
+        self.city_map.building_moved.connect(self.on_building_moved)
         layout.addWidget(self.city_map)
+
+        # Переключатель темы для карты и приложения
+        theme_buttons = QHBoxLayout()
+        theme_label = QLabel("Тема:")
+        day_btn = QPushButton("День")
+        day_btn.setIcon(self.load_icon("icon_sun.png"))
+        night_btn = QPushButton("Ночь")
+        night_btn.setIcon(self.load_icon("icon_moon.png"))
+        day_btn.clicked.connect(lambda: self.set_theme('day'))
+        night_btn.clicked.connect(lambda: self.set_theme('night'))
+
+        # Режим редактирования карты
+        self.map_edit_checkbox = QCheckBox("Редактировать размещение домов")
+        self.map_edit_checkbox.stateChanged.connect(
+            lambda state: setattr(self.city_map, "edit_mode", bool(state))
+        )
+
+        zoom_in_btn = QPushButton("+")
+        zoom_in_btn.setIcon(self.load_icon("icon_zoom_in.png"))
+        zoom_out_btn = QPushButton("-")
+        zoom_out_btn.setIcon(self.load_icon("icon_zoom_out.png"))
+        zoom_in_btn.clicked.connect(self.city_map.zoom_in)
+        zoom_out_btn.clicked.connect(self.city_map.zoom_out)
+
+        theme_buttons.addWidget(theme_label)
+        theme_buttons.addWidget(day_btn)
+        theme_buttons.addWidget(night_btn)
+        theme_buttons.addWidget(zoom_out_btn)
+        theme_buttons.addWidget(zoom_in_btn)
+        theme_buttons.addWidget(self.map_edit_checkbox)
+        theme_buttons.addStretch()
+        layout.addLayout(theme_buttons)
         
         buttons = QHBoxLayout()
         add_building_btn = QPushButton("Добавить здание")
+        add_building_btn.setIcon(self.load_icon("icon_add_building.png"))
         add_building_btn.clicked.connect(self.add_object)
         refresh_btn = QPushButton("Обновить карту")
+        refresh_btn.setIcon(self.load_icon("icon_refresh.png"))
         refresh_btn.clicked.connect(self.refresh_map)
         load_map_btn = QPushButton("Загрузить карту")
+        load_map_btn.setIcon(self.load_icon("icon_map.png"))
         load_map_btn.clicked.connect(self.load_map_image)
         
         backup_btn = QPushButton("Создать резервную копию")
+        backup_btn.setIcon(self.load_icon("icon_backup.png"))
         backup_btn.clicked.connect(self.create_manual_backup)
         
         buttons.addWidget(add_building_btn)
@@ -2341,8 +2621,26 @@ class MainWindow(QMainWindow):
         self.setGeometry(100, 100, 1200, 800)
     
     def on_building_clicked(self, object_id: int):
+        # Показываем диалог с пользователями объекта
         dialog = BuildingUsersDialog(object_id, self.db, self)
         dialog.exec()
+
+        # Обновляем статус-бар с информацией об объекте
+        obj = self.object_repo.get_by_id(object_id)
+        if obj and self.statusBar():
+            coords_text = ""
+            if obj.building_x is not None and obj.building_y is not None:
+                coords_text = f" | Координаты: X={obj.building_x}, Y={obj.building_y}"
+            self.statusBar().showMessage(
+                f"Объект #{obj.id}: {obj.address}{coords_text}"
+            )
+
+    def on_building_moved(self, object_id: int, x: int, y: int):
+        """Вызывается после сохранения новых координат здания на карте."""
+        if self.statusBar():
+            self.statusBar().showMessage(
+                f"Перемещен объект #{object_id}: X={x}, Y={y}"
+            )
     
     def add_object(self):
         dialog = ObjectDialog(parent=self)
@@ -2357,16 +2655,15 @@ class MainWindow(QMainWindow):
             self.city_map.refresh()
     
     def load_map_image(self):
-        filename, _ = QFileDialog.getOpenFileName(
-            self, "Выбрать изображение карты", "", 
-            "Images (*.png *.jpg *.jpeg *.bmp)")
-        if filename:
-            import shutil
-            target_path = "city_map" + os.path.splitext(filename)[1]
-            shutil.copy2(filename, target_path)
-            self.city_map.find_map_image()
-            self.city_map.update()
-            QMessageBox.information(self, "Успех", f"Карта загружена: {target_path}")
+        # Ранее здесь можно было выбрать произвольную карту.
+        # Теперь проект использует только две карты из папки app/img (day.png и night.png),
+        # поэтому просто показываем подсказку.
+        QMessageBox.information(
+            self,
+            "Карта",
+            "Карта города берётся из файлов app/img/day.png и app/img/night.png.\n"
+            "Переключение между ними выполняется через выбор темы (день/ночь)."
+        )
     
     def create_manual_backup(self):
         try:
